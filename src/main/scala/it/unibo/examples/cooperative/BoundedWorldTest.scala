@@ -15,15 +15,27 @@ object BoundedWorldTest:
   val numAgents = 2
   val boundSize = 10
   val numActions = 5
+  val gapColumn = 8
+  val wallRow = 5
   val trainingEpisodes = 1000
   val longTraining = 10000
   val testEpisodes = 10
-  val stepsPerEpisode = 25
+  val stepsPerEpisode = 50
   val replayBufferSize = 3000
   val renderIntervalTest = 1
   val renderIntervalTraining = 100
   val frameDelayMs = 33
-
+  val visionRange = 8
+  val obstacles: Set[(Int, Int)] =
+    (0 until boundSize)
+      .filter(_ != gapColumn)
+      .map(x => (x, wallRow))
+      .toSet
+  val fixedInitial: List[(Int, Int)] =
+    List(
+      (1, 2),
+      (1, 8)
+    )
   private def printSpaceInfo(name: String, states: Long, actions: Long): Unit =
     println(s"[$name] States: $states, Actions: $actions, State-Action pairs: ${states * actions}")
 
@@ -33,11 +45,19 @@ object BoundedWorldTest:
     (for
       r <- 0 until boundSize
       c <- 0 until boundSize
-    yield RelativeState(r, c)).asEnumerable
+      obstacleVisible <- Seq(false, true)
+      obstacleDx <-
+        if obstacleVisible then -visionRange to visionRange
+        else Seq(0)
+      obstacleDy <-
+        if obstacleVisible then -visionRange to visionRange
+        else Seq(0)
+
+    yield RelativeState(r, c, obstacleDx, obstacleDy, obstacleVisible)).asEnumerable
   given NeuralNetworkEncoding[State] = StateEncoding(numAgents, boundSize)
   given NeuralNetworkEncoding[RelativeState] = RelativeStateEncoding(boundSize)
   given Scheduler = Scheduler()
-  val environment = BoundedWorldEnvironment(numAgents, boundSize)
+  val environment = BoundedWorldEnvironment(numAgents, boundSize, obstacles, -5.0, -0.15, Some(fixedInitial))
   val render = GridWorldRender(boundSize, renderIntervalTraining, frameDelayMs)
   val simulator = Simulation(environment, render)
 
@@ -47,8 +67,8 @@ object BoundedWorldTest:
     val epsilonInitial = 0.9
     val epsilonDecay = 0.003
     val epsilonMin = 0.05
-
-    val relativeStates = boundSize * boundSize
+    val obstacleStates = ((visionRange * 2 + 1) * (visionRange * 2 + 1) - 1) + 1
+    val relativeStates = boundSize * boundSize * obstacleStates
     printSpaceInfo("sharedQ", relativeStates, numActions)
     val same = Q.zeros[RelativeState, Action]
     val agents = environment.state.indices.map { i =>
@@ -58,7 +78,7 @@ object BoundedWorldTest:
         gamma,
         DecayReference.exponentialDecay(epsilonInitial, epsilonDecay).bounded(epsilonMin)
       )
-      RelativeStateAgent(qAgent, i, boundSize)
+      RelativeStateAgent(qAgent, i, boundSize, obstacles, visionRange)
     }
     agents.foreach(_.trainingMode())
     simulator.simulate(trainingEpisodes, stepsPerEpisode, agents)
@@ -83,7 +103,7 @@ object BoundedWorldTest:
           gamma,
           DecayReference.exponentialDecay(epsilonInitial, epsilonDecay).bounded(epsilonMin)
         )
-      RelativeStateAgent(qAgent, i, boundSize)
+      RelativeStateAgent(qAgent, i, boundSize, obstacles, visionRange)
     }
     agents.foreach(_.trainingMode())
     simulator.simulate(trainingEpisodes, stepsPerEpisode, agents)
@@ -128,7 +148,7 @@ object BoundedWorldTest:
         batchSize,
         targetUpdateFreq
       )
-      RelativeStateAgent(qAgent, i, boundSize)
+      RelativeStateAgent(qAgent, i, boundSize, obstacles, visionRange)
     }
     agents.foreach(_.trainingMode())
     simulator.simulate(trainingEpisodes, stepsPerEpisode, agents)
@@ -157,7 +177,7 @@ object BoundedWorldTest:
       targetUpdateFreq
     )
     val agents = environment.state.indices.map { i =>
-      RelativeStateAgent(if i == 0 then qLearner else qLearner.slave(), i, boundSize)
+      RelativeStateAgent(if i == 0 then qLearner else qLearner.slave(), i, boundSize, obstacles, visionRange)
     }
     agents.foreach(_.trainingMode())
     simulator.simulate(trainingEpisodes, stepsPerEpisode, agents)
