@@ -12,7 +12,8 @@ class BoundedWorldEnvironment(using random: Random)(
     obstacles: Set[(Int, Int)] = Set.empty,
     obstacleHitPenalty: Double = -5.0,
     obstacleNearPenalty: Double = -0.15,
-    fixedInitial: Option[State] = None
+    fixedInitial: Option[State] = None,
+    gapColumn: Int
 ) extends MultiAgentEnvironment[BoundedWorldEnvironment.State, BoundedWorldEnvironment.Action]:
   import BoundedWorldEnvironment.*
 
@@ -27,7 +28,9 @@ class BoundedWorldEnvironment(using random: Random)(
     }
 
   def act(actions: Seq[Action]): Seq[Double] =
-    val prevDistance = computeAlignmentReward(alignmentDistance(state))
+    val prevDistance = alignmentDistance(state)
+    val previousGapDistances = state.map { case (row, col) => math.abs(row - gapColumn) }
+    // adds positive signal for moving towards the gap column, otherwise agents stay on diff sides of the wall
     val transitions =
       state.zip(actions).map { case (currentPosition, action) =>
         val proposedPosition =
@@ -42,16 +45,22 @@ class BoundedWorldEnvironment(using random: Random)(
     state = transitions.map(_._1)
     val alignmentReward =
       computeAlignmentReward(prevDistance)
+    val gapRewards = state.zip(previousGapDistances).map { case ((row, _), previousDistance) =>
+      val currentDistance = math.abs(row - gapColumn)
+      if currentDistance < previousDistance then 0.5
+      else if currentDistance > previousDistance then -0.5
+      else 0.0
+    }
 
-    transitions.zip(state).map {
-      case ((_, true), _) =>
-        alignmentReward + obstacleHitPenalty
+    transitions.zip(state).zip(gapRewards).map {
+      case (((_, true), _), gapReward) =>
+        alignmentReward + gapReward + obstacleHitPenalty
 
-      case ((_, false), position) if isNearObstacle(position) =>
-        alignmentReward + obstacleNearPenalty
+      case (((_, false), position), gapReward) if isNearObstacle(position) =>
+        alignmentReward + gapReward + obstacleNearPenalty
 
-      case _ =>
-        alignmentReward
+      case ((_, _), gapReward) =>
+        alignmentReward + gapReward
     }
 
   override def reset(): Unit = state = fixedInitial.getOrElse(generatePosition)
@@ -59,18 +68,16 @@ class BoundedWorldEnvironment(using random: Random)(
   private def alignmentDistance(state: State): Int =
     val rows = state.map(_._2)
     rows.max - rows.min
-  private def computeAlignmentReward(previousDistance: Double): Double =
-      val newDistance = alignmentDistance(state)
-      val alignmentReward =
-        if newDistance == 0 then
-          5.0
-        else if newDistance < previousDistance then
-          1.0
-        else if newDistance > previousDistance then
-          -1.0
-        else
-          -0.05
-      alignmentReward    
+  private def computeAlignmentReward(previousDistance: Int): Double =
+    val newDistance = alignmentDistance(state)
+    if newDistance == 0 then
+      5.0
+    else if newDistance < previousDistance then
+      1.0
+    else if newDistance > previousDistance then
+      -1.0
+    else
+      -0.05
 
   private def generatePosition: State =
     val half = boundSize / 2
@@ -112,7 +119,14 @@ object BoundedWorldEnvironment:
   type State = List[(Int, Int)]
   type Action = MovementAction
 
-  case class RelativeState(rowDiff: Int, colDiff: Int, obstacleDiffX: Int, obstacleDiffY: Int, obstacleVisible: Boolean)
+  case class RelativeState(
+      rowDiff: Int,
+      colDiff: Int,
+      obstacleUp: Int,
+      obstacleDown: Int,
+      obstacleLeft: Int,
+      obstacleRight: Int
+  )
 
   def toRelative(state: State, agentIndex: Int, boundSize: Int, obstacles: Set[(Int, Int)], visionRange: Int): RelativeState =
     val (myRow, myCol) = state(agentIndex)
@@ -120,35 +134,25 @@ object BoundedWorldEnvironment:
     val (otherRow, otherCol) = state(otherIndex)
     val rowDiff = otherRow - myRow
     val colDiff = otherCol - myCol
-    val visibleObstacles =
-      obstacles.filter { case (x, y) =>
-        math.abs(x - myRow) <= visionRange &&
-          math.abs(y - myCol) <= visionRange
-      }
+    val noObstacle = visionRange + 1
 
-    val nearest =
-      visibleObstacles.minByOption { case (x, y) =>
-        math.abs(x - myRow) + math.abs(y - myCol)
-      }
+    def nearestDistance(distances: Iterable[Int]): Int =
+      distances.filter(_ <= visionRange).minOption.getOrElse(noObstacle)
 
-    nearest match
-      case Some((ox, oy)) =>
-        RelativeState(
-          rowDiff,
-          colDiff,
-          ox - myRow,
-          oy - myCol,
-          true
-        )
+    val obstacleUp = nearestDistance(
+      obstacles.collect { case (row, col) if col == myCol && row < myRow => myRow - row }
+    )
+    val obstacleDown = nearestDistance(
+      obstacles.collect { case (row, col) if col == myCol && row > myRow => row - myRow }
+    )
+    val obstacleLeft = nearestDistance(
+      obstacles.collect { case (row, col) if row == myRow && col < myCol => myCol - col }
+    )
+    val obstacleRight = nearestDistance(
+      obstacles.collect { case (row, col) if row == myRow && col > myCol => col - myCol }
+    )
 
-      case None =>
-        RelativeState(
-          rowDiff,
-          colDiff,
-          0,
-          0,
-          false
-        )
+    RelativeState(rowDiff, colDiff, obstacleUp, obstacleDown, obstacleLeft, obstacleRight)
 
   def fromRelative(rs: RelativeState, myPos: (Int, Int), boundSize: Int): (Int, Int) =
     ((myPos._1 + rs.rowDiff) % boundSize, (myPos._2 + rs.colDiff) % boundSize)

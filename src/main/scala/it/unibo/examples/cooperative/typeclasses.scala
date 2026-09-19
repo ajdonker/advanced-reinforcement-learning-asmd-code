@@ -10,8 +10,17 @@ class StateEncoding(agents: Int, maxBound: Float) extends NeuralNetworkEncoding[
     case (l, r) =>
       List(l / maxBound, r / maxBound)
 
-class RelativeStateEncoding(boundSize: Int) extends NeuralNetworkEncoding[RelativeState]:
-  private val stateSpaceSize = 2
-  override def elements: Int = stateSpaceSize
+class RelativeStateEncoding(boundSize: Int, visionRange: Int) extends NeuralNetworkEncoding[RelativeState]:
+  private val noObstacle = visionRange + 1
+
+  override def elements: Int = 6
+
   override def toSeq(elem: RelativeState): Seq[Double] =
-    List(elem.rowDiff.toDouble / boundSize, elem.colDiff.toDouble / boundSize)
+    List(
+      elem.rowDiff.toDouble / boundSize,
+      elem.colDiff.toDouble / boundSize,
+      elem.obstacleUp.toDouble / noObstacle,
+      elem.obstacleDown.toDouble / noObstacle,
+      elem.obstacleLeft.toDouble / noObstacle,
+      elem.obstacleRight.toDouble / noObstacle
+    )

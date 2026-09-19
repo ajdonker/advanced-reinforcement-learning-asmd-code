@@ -25,7 +25,7 @@ object BoundedWorldTest:
   val renderIntervalTest = 1
   val renderIntervalTraining = 100
   val frameDelayMs = 33
-  val visionRange = 8
+  val visionRange = 3
   val obstacles: Set[(Int, Int)] =
     (0 until boundSize)
       .filter(_ != gapColumn)
@@ -43,21 +43,18 @@ object BoundedWorldTest:
   given Enumerable[Seq[MovementAction]] = Enumerable.productOf(numAgents)
   given Enumerable[RelativeState] =
     (for
-      r <- 0 until boundSize
-      c <- 0 until boundSize
-      obstacleVisible <- Seq(false, true)
-      obstacleDx <-
-        if obstacleVisible then -visionRange to visionRange
-        else Seq(0)
-      obstacleDy <-
-        if obstacleVisible then -visionRange to visionRange
-        else Seq(0)
-
-    yield RelativeState(r, c, obstacleDx, obstacleDy, obstacleVisible)).asEnumerable
+      myRow <- 0 until boundSize
+      myCol <- 0 until boundSize
+      otherRow <- 0 until boundSize
+      otherCol <- 0 until boundSize
+    yield toRelative(List((myRow, myCol), (otherRow, otherCol)), 0, boundSize, obstacles, visionRange))
+      .distinct
+      .asEnumerable
   given NeuralNetworkEncoding[State] = StateEncoding(numAgents, boundSize)
-  given NeuralNetworkEncoding[RelativeState] = RelativeStateEncoding(boundSize)
+  given NeuralNetworkEncoding[RelativeState] = RelativeStateEncoding(boundSize, visionRange)
   given Scheduler = Scheduler()
-  val environment = BoundedWorldEnvironment(numAgents, boundSize, obstacles, -5.0, -0.15, Some(fixedInitial))
+  val environment =
+    BoundedWorldEnvironment(numAgents, boundSize, obstacles, -5.0, -0.15, Some(fixedInitial), gapColumn)
   val render = GridWorldRender(boundSize, renderIntervalTraining, frameDelayMs)
   val simulator = Simulation(environment, render)
 
@@ -67,8 +64,7 @@ object BoundedWorldTest:
     val epsilonInitial = 0.9
     val epsilonDecay = 0.003
     val epsilonMin = 0.05
-    val obstacleStates = ((visionRange * 2 + 1) * (visionRange * 2 + 1) - 1) + 1
-    val relativeStates = boundSize * boundSize * obstacleStates
+    val relativeStates = Enumerable[RelativeState].size
     printSpaceInfo("sharedQ", relativeStates, numActions)
     val same = Q.zeros[RelativeState, Action]
     val agents = environment.state.indices.map { i =>
